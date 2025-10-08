@@ -22,39 +22,63 @@ SLOT_MINUTES = 30  # alap időslot méret (per szolgáltatás lehet hosszabb)
 # ----------------------
 
 # --- Helper: Google Sheets client from Streamlit secrets ---
+# Expected secrets formats:
+# 1) Preferred: a table/dict named 'gcp_service_account' in Streamlit secrets
+#    Example in .streamlit/secrets.toml:
+#    [gcp_service_account]
+#    type = "service_account"
+#    project_id = "..."
+#    private_key_id = "..."
+#    private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+#    client_email = "..."
+#
+# 2) Fallback: a single JSON string under key 'GCP_SA_JSON' (can contain literal "\\n" sequences)
+#    In that case set GCP_SA_JSON = '{"type":"service_account", ... }'
+#
+# The helper below normalizes escaped newlines ("\\n") into real newlines and validates
+# the presence of required fields, giving clearer Streamlit errors if something is missing.
 @st.cache_resource(ttl=600)
 def get_gsheets_client():
-    """
-    1) Először a [gcp_service_account] TOML táblát keresi a secrets-ben.
-    2) Ha nincs, akkor GCP_SA_JSON több-soros JSON string.
-    A private_key sortöréseket normalizálja.
-    """
     info = None
 
-    # 1) Preferált: TOML tábla
+    # 1) Preferált: TOML / dict táblázat in secrets under key 'gcp_service_account'
     if "gcp_service_account" in st.secrets:
-        info = dict(st.secrets["gcp_service_account"])
-
-    # 2) Fallback: JSON string
-    if info is None and "GCP_SA_JSON" in st.secrets:
-        raw = st.secrets["GCP_SA_JSON"]
         try:
-            info = json.loads(raw)
+            info = dict(st.secrets["gcp_service_account"])
         except Exception:
-            st.error("A GCP_SA_JSON nem érvényes JSON. Használd inkább a [gcp_service_account] táblát a Secrets-ben.")
+            st.error("A 'gcp_service_account' formátuma érvénytelen a Secrets-ben. Legyen egy kulcs-érték párokból álló táblázat.")
             st.stop()
 
+    # 2) Fallback: JSON string in GCP_SA_JSON
+    if info is None and "GCP_SA_JSON" in st.secrets:
+        raw = st.secrets["GCP_SA_JSON"]
+        # If secret was pasted as a Python-style triple-quoted JSON, strip surrounding whitespace
+        raw = raw.strip()
+        try:
+            info = json.loads(raw)
+        except Exception as e:
+            # Try a common case: user pasted JSON and newlines were escaped (\n)
+            try:
+                info = json.loads(raw.replace('\\\n', '\\n'))
+            except Exception:
+                st.error("A GCP_SA_JSON nem érvényes JSON. Használd inkább a 'gcp_service_account' táblát a Secrets-ben, vagy ellenőrizd a JSON-t.")
+                st.stop()
+
     if info is None:
-        st.error("Hiányzik a Google service account a Secrets-ben. Adj meg [gcp_service_account] táblát VAGY GCP_SA_JSON-t.")
+        st.error("Hiányzik a Google service account a Secrets-ben. Adj meg 'gcp_service_account' táblát VAGY GCP_SA_JSON-t.")
+        st.stop()
+
+    # validate minimal required keys
+    required = ["type", "project_id", "private_key_id", "private_key", "client_email"]
+    missing = [k for k in required if k not in info or not info.get(k)]
+    if missing:
+        st.error(f"A service account JSON hiányos, hiányzó mezők: {', '.join(missing)}")
         st.stop()
 
     pk = info.get("private_key", "")
-    if not pk:
-        st.error("A service accountban hiányzik a private_key.")
-        st.stop()
-
-    # Normalizálás: ha valaki \n-ekkel tette be, alakítsuk valódi sorokra
-    if "\\n" in pk and "BEGIN PRIVATE KEY" in pk:
+    # Normalizálás: ha valaki escaped newlines-szal (\n) adta meg, alakítsuk valódi sorokra
+    # Accept either real newlines or literal '\n' sequences
+    if isinstance(pk, str) and "\\n" in pk and "BEGIN PRIVATE KEY" in pk:
         pk = pk.replace("\\n", "\n")
     pk = pk.strip()
     info["private_key"] = pk
@@ -63,8 +87,12 @@ def get_gsheets_client():
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-    creds = Credentials.from_service_account_info(info, scopes=scopes)
-    client = gspread.authorize(creds)
+    try:
+        creds = Credentials.from_service_account_info(info, scopes=scopes)
+        client = gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"Hiba a Google hitelesítés létrehozásakor: {e}")
+        st.stop()
     return client
 
 
