@@ -168,8 +168,9 @@ def read_dataframes():
     sh = ensure_sheets()
     bookings_ws = sh.worksheet(BOOKINGS_WS)
     services_ws = sh.worksheet(SERVICES_WS)
-    bookings = pd.DataFrame(bookings_ws.get_all_records())
-    services = pd.DataFrame(services_ws.get_all_records())
+    bookings = pd.DataFrame(safe_get_all_records(bookings_ws))
+    services = pd.DataFrame(safe_get_all_records(services_ws))
+
     return bookings, services, sh
 
 # --- Utility: generate timeslots for a selected day based on working hours and services
