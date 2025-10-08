@@ -99,32 +99,43 @@ def get_gsheets_client():
 # --- Initialize sheet/workbooks if not existing
 def ensure_sheets():
     client = get_gsheets_client()
-    try:
-        sh = client.open(SHEET_NAME)
-    except gspread.SpreadsheetNotFound:
-        sh = client.create(SHEET_NAME)
-        # Share is not necessary if using service account that owns it,
-        # but you might want to share with Eszter's email manually if needed.
-    # ensure worksheets
+    sheet_id = st.secrets.get("SHEET_ID")
+
+    if sheet_id:
+        sh = client.open_by_key(sheet_id)  # Drive API nélkül
+    else:
+        try:
+            sh = client.open(SHEET_NAME)
+        except gspread.SpreadsheetNotFound:
+            sh = client.create(SHEET_NAME)
+
+    # -- Bookings ws
     try:
         bookings_ws = sh.worksheet(BOOKINGS_WS)
     except gspread.WorksheetNotFound:
         bookings_ws = sh.add_worksheet(title=BOOKINGS_WS, rows="1000", cols="20")
-        bookings_ws.append_row(["id","date","start_time","end_time","service","duration_min","name","phone","status","note","created_at"])
+
+    bookings_header = ["id","date","start_time","end_time","service","duration_min","name","phone","status","note","created_at"]
+    first_row = bookings_ws.row_values(1)
+    if [c.strip().lower() for c in first_row] != bookings_header:
+        # ha üres vagy rossz, felülírjuk a headert
+        bookings_ws.update("A1:K1", [bookings_header])
+
+    # -- Services ws
     try:
         services_ws = sh.worksheet(SERVICES_WS)
     except gspread.WorksheetNotFound:
-        services_ws = sh.add_worksheet(title=SERVICES_WS, rows="50", cols="10")
-        # default services (name, duration_min, price)
-        default_services = [
-            ["Géllakk", 60, "8000"],
-            ["Töltés", 90, "12000"],
-            ["Manikűr", 45, "6000"],
-            ["Díszítés (1db)", 10, "500"]
-        ]
-        services_ws.append_row(["service","duration_min","price"])
-        for r in default_services:
-            services_ws.append_row(r)
+        services_ws = sh.add_worksheet(title=SERVICES_WS, rows="200", cols="10")
+
+    services_header = ["service","duration_min","price"]
+    first_row = services_ws.row_values(1)
+    if [c.strip().lower() for c in first_row] != services_header:
+        services_ws.update("A1:C1", [services_header])
+        # ha teljesen üres, töltsünk alapértelmezettel
+        services_ws.append_row(["Géllakk", 60, "8000"])
+        services_ws.append_row(["Töltés", 90, "12000"])
+        services_ws.append_row(["Manikűr", 45, "6000"])
+
     return sh
 
 # --- Read bookings and services into DataFrames
