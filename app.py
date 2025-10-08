@@ -94,7 +94,27 @@ def get_gsheets_client():
         st.error(f"Hiba a Google hitelesítés létrehozásakor: {e}")
         st.stop()
     return client
-
+def safe_get_all_records(ws):
+    # ha teljesen üres a sheet, adj vissza üres listát
+    values = ws.get_all_values()
+    if not values:
+        return []
+    # ha nincs header sor, adj vissza üreset
+    if not values[0]:
+        return []
+    try:
+        return ws.get_all_records()
+    except Exception:
+        # vészfék: építs dict-eket a headerből, üres cellákat üres stringgel
+        headers = values[0]
+        rows = values[1:] if len(values) > 1 else []
+        out = []
+        for r in rows:
+            row = {}
+            for i, k in enumerate(headers):
+                row[str(k).strip().lower()] = r[i] if i < len(r) else ""
+            out.append(row)
+        return out
 
 # --- Initialize sheet/workbooks if not existing
 def ensure_sheets():
@@ -102,14 +122,16 @@ def ensure_sheets():
     sheet_id = st.secrets.get("SHEET_ID")
 
     if sheet_id:
-        sh = client.open_by_key(sheet_id)  # Drive API nélkül
+        # Drive API nélkül, közvetlen ID-val
+        sh = client.open_by_key(sheet_id)
     else:
+        # Név alapú nyitás/létrehozás (ehhez Drive API kell)
         try:
             sh = client.open(SHEET_NAME)
         except gspread.SpreadsheetNotFound:
             sh = client.create(SHEET_NAME)
 
-    # -- Bookings ws
+    # --- Bookings worksheet ---
     try:
         bookings_ws = sh.worksheet(BOOKINGS_WS)
     except gspread.WorksheetNotFound:
@@ -117,11 +139,12 @@ def ensure_sheets():
 
     bookings_header = ["id","date","start_time","end_time","service","duration_min","name","phone","status","note","created_at"]
     first_row = bookings_ws.row_values(1)
-    if [c.strip().lower() for c in first_row] != bookings_header:
-        # ha üres vagy rossz, felülírjuk a headert
+    # ha nincs fejléc vagy eltért, írjuk felül
+    norm = [c.strip().lower() for c in first_row] if first_row else []
+    if norm != bookings_header:
         bookings_ws.update("A1:K1", [bookings_header])
 
-    # -- Services ws
+    # --- Services worksheet ---
     try:
         services_ws = sh.worksheet(SERVICES_WS)
     except gspread.WorksheetNotFound:
@@ -129,9 +152,10 @@ def ensure_sheets():
 
     services_header = ["service","duration_min","price"]
     first_row = services_ws.row_values(1)
-    if [c.strip().lower() for c in first_row] != services_header:
+    norm = [c.strip().lower() for c in first_row] if first_row else []
+    if norm != services_header:
         services_ws.update("A1:C1", [services_header])
-        # ha teljesen üres, töltsünk alapértelmezettel
+        # adjunk alapértelmezett sorokat, ha üres
         services_ws.append_row(["Géllakk", 60, "8000"])
         services_ws.append_row(["Töltés", 90, "12000"])
         services_ws.append_row(["Manikűr", 45, "6000"])
