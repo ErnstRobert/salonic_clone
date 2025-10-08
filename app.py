@@ -25,26 +25,48 @@ SLOT_MINUTES = 30  # alap időslot méret (per szolgáltatás lehet hosszabb)
 @st.cache_resource(ttl=600)
 def get_gsheets_client():
     """
-    Expect either:
-      - st.secrets["GCP_SA_JSON"] = full JSON string of service account
-      OR
-      - st.secrets["gcp_service_account"] nested dictionary (each key)
+    1) Először a [gcp_service_account] TOML táblát keresi a secrets-ben.
+    2) Ha nincs, akkor GCP_SA_JSON több-soros JSON string.
+    A private_key sortöréseket normalizálja.
     """
-    if "GCP_SA_JSON" in st.secrets:
-        info = json.loads(st.secrets["GCP_SA_JSON"])
-    elif "gcp_service_account" in st.secrets:
+    info = None
+
+    # 1) Preferált: TOML tábla
+    if "gcp_service_account" in st.secrets:
         info = dict(st.secrets["gcp_service_account"])
-    else:
-        st.error("Nem található Google service account adatok a Streamlit secrets-ben. Add meg a deploy útmutató szerint.")
+
+    # 2) Fallback: JSON string
+    if info is None and "GCP_SA_JSON" in st.secrets:
+        raw = st.secrets["GCP_SA_JSON"]
+        try:
+            info = json.loads(raw)
+        except Exception:
+            st.error("A GCP_SA_JSON nem érvényes JSON. Használd inkább a [gcp_service_account] táblát a Secrets-ben.")
+            st.stop()
+
+    if info is None:
+        st.error("Hiányzik a Google service account a Secrets-ben. Adj meg [gcp_service_account] táblát VAGY GCP_SA_JSON-t.")
         st.stop()
+
+    pk = info.get("private_key", "")
+    if not pk:
+        st.error("A service accountban hiányzik a private_key.")
+        st.stop()
+
+    # Normalizálás: ha valaki \n-ekkel tette be, alakítsuk valódi sorokra
+    if "\\n" in pk and "BEGIN PRIVATE KEY" in pk:
+        pk = pk.replace("\\n", "\n")
+    pk = pk.strip()
+    info["private_key"] = pk
 
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
+        "https://www.googleapis.com/auth/drive",
     ]
     creds = Credentials.from_service_account_info(info, scopes=scopes)
     client = gspread.authorize(creds)
     return client
+
 
 # --- Initialize sheet/workbooks if not existing
 def ensure_sheets():
